@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SohaCity — Test Console</title>
+
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<!-- Google Identity Services -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<style>
+  :root{
+    --bg-deep:#05050a;
+    --bg-panel: rgba(20,20,30,0.55);
+    --neon-purple:#a855f7;
+    --neon-blue:#38bdf8;
+    --neon-pink:#f472b6;
+    --border-glass: rgba(255,255,255,0.08);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: radial-gradient(circle at 15% 0%, rgba(168,85,247,0.18), transparent 40%),
+                radial-gradient(circle at 85% 20%, rgba(56,189,248,0.14), transparent 45%),
+                radial-gradient(circle at 50% 100%, rgba(244,114,182,0.10), transparent 50%),
+                var(--bg-deep);
+    color: #e5e7eb;
+    font-family: 'Segoe UI', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .glass {
+    background: var(--bg-panel);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid var(--border-glass);
+  }
+
+  .glow-purple { box-shadow: 0 0 25px -5px rgba(168,85,247,0.6); }
+  .glow-blue { box-shadow: 0 0 25px -5px rgba(56,189,248,0.5); }
+
+  .neon-text {
+    background: linear-gradient(90deg, var(--neon-purple), var(--neon-blue));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--neon-purple), var(--neon-blue));
+    transition: all .25s ease;
+  }
+  .btn-primary:hover { filter: brightness(1.15); transform: translateY(-1px); box-shadow: 0 0 25px rgba(168,85,247,0.5); }
+  .btn-primary:active { transform: translateY(0px) scale(0.98); }
+
+  .fade-in { animation: fadeIn .35s ease forwards; }
+  @keyframes fadeIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
+
+  .tab-active {
+    color: white;
+    background: linear-gradient(135deg, rgba(168,85,247,0.25), rgba(56,189,248,0.25));
+    box-shadow: 0 0 20px -5px rgba(168,85,247,0.5);
+  }
+
+  .reel-item {
+    scroll-snap-align: start;
+    height: 100%;
+    width: 100%;
+  }
+  .reel-container {
+    scroll-snap-type: y mandatory;
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+  }
+  .reel-container::-webkit-scrollbar { display: none; }
+
+  .spinner {
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: var(--neon-purple);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast {
+    animation: slideUp .3s ease forwards;
+  }
+  @keyframes slideUp { from { opacity:0; transform: translateY(20px);} to {opacity:1; transform: translateY(0);} }
+
+  input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.35); }
+
+  .skeleton {
+    background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 37%, rgba(255,255,255,0.04) 63%);
+    background-size: 400% 100%;
+    animation: skeleton 1.4s ease infinite;
+  }
+  @keyframes skeleton { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+</style>
+</head>
+<body class="h-full w-full">
+
+<div id="app" class="h-full w-full relative"></div>
+
+<!-- Toast container -->
+<div id="toast-container" class="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 items-center pointer-events-none"></div>
+
+<script>
+/* =========================================================================
+   CONFIG — edit this to point at your backend
+   ========================================================================= */
+let BASE_URL = "http://localhost:5000/api/v1";
+const GOOGLE_CLIENT_ID = "1040222992173-ah4s5a31k605nb3b4lks778pg6jtku02.apps.googleusercontent.com"; // <-- set your OAuth Web Client ID here
+
+/* =========================================================================
+   STATE
+   ========================================================================= */
+const state = {
+  user: JSON.parse(localStorage.getItem("sohacity_user") || "null"),
+  token: localStorage.getItem("sohacity_token") || null,
+  activeTab: "home",
+  posts: [],
+  reels: [],
+  loadingPosts: false,
+  loadingReels: false,
+  postingInProgress: false,
+  composer: { text: "", mediaUrl: "", type: "text" },
+  currentReelIndex: 0,
+};
+
+/* =========================================================================
+   TOASTS
+   ========================================================================= */
+function showToast(message, type = "info") {
+  const colors = {
+    success: "border-emerald-400/40 text-emerald-300",
+    error: "border-rose-400/40 text-rose-300",
+    info: "border-sky-400/40 text-sky-300",
+  };
+  const container = document.getElementById("toast-container");
+  const el = document.createElement("div");
+  el.className = `toast glass ${colors[type] || colors.info} rounded-xl px-4 py-3 text-sm font-medium shadow-lg pointer-events-auto max-w-[90vw] md:max-w-sm flex items-center gap-2`;
+  el.innerHTML = `<span>${type === "success" ? "✅" : type === "error" ? "⚠️" : "ℹ️"}</span><span>${escapeHtml(message)}</span>`;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .3s ease";
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 300);
+  }, 3200);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* =========================================================================
+   API HELPERS
+   ========================================================================= */
+async function apiFetch(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (state.token) headers["Authorization"] = `Bearer ${state.token}`;
+
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* no body */ }
+
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error)) || `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function loginWithGoogle(credential) {
+  try {
+    const data = await apiFetch("/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ credential }),
+    });
+
+    const user = data.user || data.data?.user || data.data || data;
+    const token = data.token || data.data?.token || data.accessToken;
+
+    if (!token) throw new Error("No token returned from server.");
+
+    state.user = user;
+    state.token = token;
+    localStorage.setItem("sohacity_user", JSON.stringify(user));
+    localStorage.setItem("sohacity_token", token);
+
+    showToast("Logged in successfully!", "success");
+    render();
+    fetchPosts();
+  } catch (err) {
+    console.error(err);
+    showToast(`Google login failed: ${err.message}`, "error");
+  }
+}
+
+function logout() {
+  state.user = null;
+  state.token = null;
+  state.posts = [];
+  state.reels = [];
+  localStorage.removeItem("sohacity_user");
+  localStorage.removeItem("sohacity_token");
+  showToast("Logged out.", "info");
+  render();
+}
+
+async function fetchPosts() {
+  state.loadingPosts = true;
+  state.loadingReels = true;
+  render();
+  try {
+    const data = await apiFetch("/posts", { method: "GET" });
+    const list = data.posts || data.data?.posts || data.data || data || [];
+    state.posts = Array.isArray(list) ? list : [];
+
+    state.reels = state.posts.filter(p => {
+      const type = (p.type || p.postType || "").toString().toLowerCase();
+      const url = (p.mediaUrl || p.media_url || p.videoUrl || "").toString().toLowerCase();
+      return type.includes("video") || /\.(mp4|webm|mov|m3u8)(\?|$)/.test(url);
+    });
+  } catch (err) {
+    console.error(err);
+    showToast(`Failed to load feed: ${err.message}`, "error");
+    state.posts = [];
+    state.reels = [];
+  } finally {
+    state.loadingPosts = false;
+    state.loadingReels = false;
+    render();
+    lucide.createIcons();
+  }
+}
+
+async function createPost() {
+  if (!state.composer.text.trim() && !state.composer.mediaUrl.trim()) {
+    showToast("Write something or add a media URL first.", "error");
+    return;
+  }
+  state.postingInProgress = true;
+  render();
+
+  const mediaUrl = state.composer.mediaUrl.trim();
+  const isVideo = /\.(mp4|webm|mov|m3u8)(\?|$)/i.test(mediaUrl);
+  const postType = mediaUrl ? (isVideo ? "video" : "image") : "text";
+
+  try {
+    const body = {
+      content: state.composer.text.trim(),
+      text: state.composer.text.trim(),
+      mediaUrl: mediaUrl || null,
+      type: postType,
+      postType: postType,
+    };
+
+    const data = await apiFetch("/posts", { method: "POST", body: JSON.stringify(body) });
+    const newPost = data.post || data.data?.post || data.data || data;
+
+    if (newPost && typeof newPost === "object") {
+      state.posts.unshift(newPost);
+      if (postType === "video") state.reels.unshift(newPost);
+    }
+
+    state.composer = { text: "", mediaUrl: "", type: "text" };
+    showToast("Post created!", "success");
+  } catch (err) {
+    console.error(err);
+    showToast(`Failed to create post: ${err.message}`, "error");
+  } finally {
+    state.postingInProgress = false;
+    render();
+    lucide.createIcons();
+  }
+}
+
+/* =========================================================================
+   GOOGLE SIGN-IN INIT
+   ========================================================================= */
+function initGoogleSignIn() {
+  const tryInit = () => {
+    if (!window.google || !google.accounts || !google.accounts.id) {
+      return setTimeout(tryInit, 300);
+    }
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (response) => loginWithGoogle(response.credential),
+      ux_mode: "popup",
+    });
+    const btnContainer = document.getElementById("google-btn-container");
+    if (btnContainer) {
+      btnContainer.innerHTML = "";
+      google.accounts.id.renderButton(btnContainer, {
+        theme: "filled_black",
+        size: "large",
+        shape: "pill",
+        width: 280,
+        text: "continue_with",
+      });
+    }
+  };
+  tryInit();
+}
+
+/* =========================================================================
+   RENDER: LOGIN SCREEN
+   ========================================================================= */
+function renderLogin() {
+  return `
+  <div class="h-full w-full flex items-center justify-center p-6 fade-in">
+    <div class="glass glow-purple rounded-3xl p-8 md:p-10 w-full max-w-md text-center relative overflow-hidden">
+      <div class="absolute -top-24 -right-24 w-56 h-56 bg-purple-600/30 rounded-full blur-3xl"></div>
+      <div class="absolute -bottom-24 -left-24 w-56 h-56 bg-sky-500/25 rounded-full blur-3xl"></div>
+
+      <div class="relative z-10">
+        <div class="w-16 h-16 mx-auto mb-5 rounded-2xl bg-gradient-to-br from-purple-500 to-sky-400 flex items-center justify-center glow-blue">
+          <i data-lucide="city" class="w-8 h-8 text-white"></i>
+        </div>
+        <h1 class="text-3xl font-extrabold neon-text mb-1">SohaCity</h1>
+        <p class="text-gray-400 text-sm mb-8">Your City, Your Story</p>
+
+        <p class="text-gray-300 text-sm mb-6">Sign in to test the platform and start posting.</p>
+
+        <div id="google-btn-container" class="flex justify-center mb-4"></div>
+
+        <button id="manual-login-fallback" class="w-full mt-2 text-xs text-gray-500 hover:text-gray-300 transition">
+          Google button not loading? Click to retry
+        </button>
+
+        <div class="mt-8 pt-6 border-t border-white/5 text-left">
+          <label class="text-xs uppercase tracking-wider text-gray-500 mb-1 block">Backend Base URL</label>
+          <input id="base-url-input" type="text" value="${escapeHtml(BASE_URL)}"
+            class="w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2 text-xs text-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500/50" />
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   RENDER: NAV
+   ========================================================================= */
+function renderTopBar() {
+  const avatar = state.user?.avatar || state.user?.picture || state.user?.photoUrl || "";
+  const name = state.user?.name || state.user?.fullName || state.user?.displayName || "Test User";
+  return `
+  <div class="glass sticky top-0 z-30 flex items-center justify-between px-4 md:px-6 py-3 border-b border-white/5">
+    <div class="flex items-center gap-2">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-sky-400 flex items-center justify-center">
+        <i data-lucide="city" class="w-5 h-5 text-white"></i>
+      </div>
+      <span class="font-bold text-lg neon-text hidden sm:block">SohaCity</span>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 pr-2">
+        ${avatar ? `<img src="${escapeHtml(avatar)}" class="w-8 h-8 rounded-full border border-white/10 object-cover" />`
+                 : `<div class="w-8 h-8 rounded-full bg-purple-500/30 flex items-center justify-center text-xs font-bold">${escapeHtml((name||"U")[0].toUpperCase())}</div>`}
+        <span class="text-sm text-gray-300 hidden md:block max-w-[120px] truncate">${escapeHtml(name)}</span>
+      </div>
+      <button id="logout-btn" class="glass px-3 py-1.5 rounded-xl text-xs text-rose-300 border border-rose-400/20 hover:bg-rose-500/10 transition flex items-center gap-1.5">
+        <i data-lucide="log-out" class="w-3.5 h-3.5"></i><span class="hidden sm:inline">Logout</span>
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderBottomNav() {
+  const tabs = [
+    { id: "home", label: "Home Feed", icon: "home" },
+    { id: "reels", label: "Reels", icon: "clapperboard" },
+  ];
+  return `
+  <div class="glass fixed bottom-0 left-0 right-0 z-40 border-t border-white/5 flex justify-around items-center py-2 px-4 md:hidden">
+    ${tabs.map(t => `
+      <button data-tab="${t.id}" class="tab-btn flex flex-col items-center gap-1 px-6 py-2 rounded-2xl transition ${state.activeTab === t.id ? "tab-active" : "text-gray-500"}">
+        <i data-lucide="${t.icon}" class="w-5 h-5"></i>
+        <span class="text-[10px] font-medium">${t.label}</span>
+      </button>`).join("")}
+  </div>
+
+  <div class="hidden md:flex flex-col glass fixed top-20 left-4 z-40 rounded-2xl p-2 gap-1 border border-white/5">
+    ${tabs.map(t => `
+      <button data-tab="${t.id}" class="tab-btn flex items-center gap-3 px-4 py-3 rounded-xl transition ${state.activeTab === t.id ? "tab-active" : "text-gray-500 hover:text-gray-300"}">
+        <i data-lucide="${t.icon}" class="w-5 h-5"></i>
+        <span class="text-sm font-medium">${t.label}</span>
+      </button>`).join("")}
+  </div>`;
+}
+
+/* =========================================================================
+   RENDER: HOME FEED
+   ========================================================================= */
+function renderComposer() {
+  return `
+  <div class="glass rounded-2xl p-4 md:p-5 mb-5 border border-white/5">
+    <textarea id="composer-text" rows="3" placeholder="What's happening in your city?"
+      class="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-sm text-gray-200 resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/50 mb-3">${escapeHtml(state.composer.text)}</textarea>
+    <div class="flex flex-col md:flex-row gap-3">
+      <input id="composer-media" type="text" placeholder="Image or video URL (optional)"
+        value="${escapeHtml(state.composer.mediaUrl)}"
+        class="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-300 focus:outline-none focus:ring-2 focus:ring-sky-500/50" />
+      <button id="submit-post-btn" ${state.postingInProgress ? "disabled" : ""}
+        class="btn-primary text-white font-semibold px-6 py-2.5 rounded-xl flex items-center justify-center gap-2 disabled:opacity-60">
+        ${state.postingInProgress
+          ? `<div class="spinner w-4 h-4"></div><span>Posting...</span>`
+          : `<i data-lucide="send" class="w-4 h-4"></i><span>Post</span>`}
+      </button>
+    </div>
+  </div>`;
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d)) return "";
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function renderPostCard(post, idx) {
+  const author = post.author || post.user || {};
+  const name = author.name || author.fullName || post.userName || "Unknown User";
+  const avatar = author.avatar || author.picture || "";
+  const text = post.content || post.text || "";
+  const media = post.mediaUrl || post.media_url || post.videoUrl || "";
+  const type = (post.type || post.postType || "").toLowerCase();
+  const isVideo = type.includes("video") || /\.(mp4|webm|mov|m3u8)(\?|$)/i.test(media);
+  const createdAt = post.createdAt || post.created_at || post.timestamp;
+
+  return `
+  <div class="glass rounded-2xl p-4 md:p-5 mb-4 border border-white/5 fade-in" style="animation-delay:${idx * 0.03}s">
+    <div class="flex items-center gap-3 mb-3">
+      ${avatar ? `<img src="${escapeHtml(avatar)}" class="w-10 h-10 rounded-full object-cover border border-white/10" />`
+               : `<div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500/50 to-sky-400/50 flex items-center justify-center text-sm font-bold">${escapeHtml((name||"U")[0].toUpperCase())}</div>`}
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-semibold text-gray-200 truncate">${escapeHtml(name)}</p>
+        <p class="text-xs text-gray-500">${escapeHtml(timeAgo(createdAt))}</p>
+      </div>
+    </div>
+
+    ${text ? `<p class="text-sm text-gray-300 mb-3 whitespace-pre-wrap">${escapeHtml(text)}</p>` : ""}
+
+    ${media ? (isVideo
+      ? `<video src="${escapeHtml(media)}" controls class="w-full rounded-xl border border-white/5 max-h-96 bg-black"></video>`
+      : `<img src="${escapeHtml(media)}" class="w-full rounded-xl border border-white/5 max-h-96 object-cover" onerror="this.style.display='none'" />`
+    ) : ""}
+
+    <div class="flex items-center gap-5 mt-4 pt-3 border-t border-white/5 text-gray-500">
+      <span class="flex items-center gap-1.5 text-xs"><i data-lucide="heart" class="w-4 h-4"></i>${post.likesCount ?? post.likes ?? 0}</span>
+      <span class="flex items-center gap-1.5 text-xs"><i data-lucide="message-circle" class="w-4 h-4"></i>${post.commentsCount ?? post.comments ?? 0}</span>
+      <span class="flex items-center gap-1.5 text-xs"><i data-lucide="share-2" class="w-4 h-4"></i>${post.sharesCount ?? post.shares ?? 0}</span>
+    </div>
+  </div>`;
+}
+
+function renderSkeletonCard() {
+  return `
+  <div class="glass rounded-2xl p-4 md:p-5 mb-4 border border-white/5">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-10 h-10 rounded-full skeleton"></div>
+      <div class="flex-1"><div class="h-3 w-24 rounded skeleton mb-2"></div><div class="h-2 w-16 rounded skeleton"></div></div>
+    </div>
+    <div class="h-3 w-full rounded skeleton mb-2"></div>
+    <div class="h-3 w-2/3 rounded skeleton"></div>
+  </div>`;
+}
+
+function renderHomeFeed() {
+  return `
+  <div class="h-full overflow-y-auto pb-24 md:pb-10 px-4 md:px-8 md:ml-56 pt-5 max-w-2xl mx-auto md:mx-0">
+    ${renderComposer()}
+    <div id="feed-list">
+      ${state.loadingPosts
+        ? Array(3).fill(0).map(renderSkeletonCard).join("")
+        : (state.posts.length
+            ? state.posts.map((p,i) => renderPostCard(p,i)).join("")
+            : `<div class="text-center text-gray-500 py-16">
+                 <i data-lucide="ghost" class="w-10 h-10 mx-auto mb-3 opacity-50"></i>
+                 <p class="text-sm">No posts yet. Be the first to share something!</p>
+               </div>`)}
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   RENDER: REELS
+   ========================================================================= */
+function renderReelSlide(reel, idx) {
+  const author = reel.author || reel.user || {};
+  const name = author.name || author.fullName || reel.userName || "Unknown Creator";
+  const caption = reel.content || reel.text || "";
+  const media = reel.mediaUrl || reel.media_url || reel.videoUrl || "";
+
+  return `
+  <div class="reel-item relative flex items-center justify-center bg-black">
+    <video
+      data-reel-video
+      src="${escapeHtml(media)}"
+      class="w-full h-full object-contain md:object-cover"
+      loop muted playsinline
+      onclick="toggleReelPlay(this)"
+    ></video>
+
+    <div class="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30 pointer-events-none"></div>
+
+    <div class="absolute bottom-20 md:bottom-10 left-0 right-0 px-5 z-10">
+      <div class="flex items-center gap-2 mb-2">
+        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-sky-400 flex items-center justify-center text-xs font-bold border-2 border-white/20">
+          ${escapeHtml((name||"U")[0].toUpperCase())}
+        </div>
+        <span class="text-sm font-semibold text-white drop-shadow">${escapeHtml(name)}</span>
+      </div>
+      ${caption ? `<p class="text-sm text-gray-200 drop-shadow max-w-md">${escapeHtml(caption)}</p>` : ""}
+    </div>
+
+    <div class="absolute right-3 bottom-24 md:bottom-14 flex flex-col items-center gap-5 z-10 text-white">
+      <button class="flex flex-col items-center gap-1"><i data-lucide="heart" class="w-7 h-7 drop-shadow"></i><span class="text-xs">${reel.likesCount ?? reel.likes ?? 0}</span></button>
+      <button class="flex flex-col items-center gap-1"><i data-lucide="message-circle" class="w-7 h-7 drop-shadow"></i><span class="text-xs">${reel.commentsCount ?? reel.comments ?? 0}</span></button>
+      <button class="flex flex-col items-center gap-1"><i data-lucide="share-2" class="w-7 h-7 drop-shadow"></i><span class="text-xs">${reel.sharesCount ?? reel.shares ?? 0}</span></button>
+    </div>
+  </div>`;
+}
+
+function renderReels() {
+  if (state.loadingReels) {
+    return `<div class="h-full w-full flex items-center justify-center"><div class="spinner w-8 h-8"></div></div>`;
+  }
+  if (!state.reels.length) {
+    return `<div class="h-full w-full flex flex-col items-center justify-center text-gray-500 px-6 text-center">
+      <i data-lucide="clapperboard" class="w-10 h-10 mb-3 opacity-50"></i>
+      <p class="text-sm">No video reels found yet.<br/>Post something with a video URL to see it here.</p>
+    </div>`;
+  }
+  return `
+  <div id="reel-container" class="reel-container h-full w-full md:max-w-md md:mx-auto">
+    ${state.reels.map((r,i) => renderReelSlide(r,i)).join("")}
+  </div>`;
+}
+
+/* =========================================================================
+   MAIN RENDER
+   ========================================================================= */
+function render() {
+  const app = document.getElementById("app");
+
+  if (!state.user || !state.token) {
+    app.innerHTML = renderLogin();
+    lucide.createIcons();
+    bindLoginEvents();
+    initGoogleSignIn();
+    return;
+  }
+
+  app.innerHTML = `
+    ${renderTopBar()}
+    <div class="h-[calc(100%-64px)] w-full relative">
+      ${state.activeTab === "home" ? renderHomeFeed() : `<div class="h-full">${renderReels()}</div>`}
+    </div>
+    ${renderBottomNav()}
+  `;
+
+  lucide.createIcons();
+  bindAppEvents();
+
+  if (state.activeTab === "reels") setupReelObserver();
+}
+
+/* =========================================================================
+   EVENT BINDING
+   ========================================================================= */
+function bindLoginEvents() {
+  const baseUrlInput = document.getElementById("base-url-input");
+  if (baseUrlInput) {
+    baseUrlInput.addEventListener("change", (e) => {
+      BASE_URL = e.target.value.trim().replace(/\/$/, "");
+      showToast(`Backend URL set to: ${BASE_URL}`, "info");
+    });
+  }
+  const retryBtn = document.getElementById("manual-login-fallback");
+  if (retryBtn) retryBtn.addEventListener("click", () => initGoogleSignIn());
+}
+
+function bindAppEvents() {
+  document.getElementById("logout-btn")?.addEventListener("click", logout);
+
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.activeTab = btn.dataset.tab;
+      render();
+      if (state.activeTab === "reels" && !state.reels.length && !state.loadingReels) {
+        fetchPosts();
+      }
+    });
+  });
+
+  const textArea = document.getElementById("composer-text");
+  const mediaInput = document.getElementById("composer-media");
+  if (textArea) textArea.addEventListener("input", (e) => state.composer.text = e.target.value);
+  if (mediaInput) mediaInput.addEventListener("input", (e) => state.composer.mediaUrl = e.target.value);
+
+  document.getElementById("submit-post-btn")?.addEventListener("click", createPost);
+}
+
+/* =========================================================================
+   REELS: autoplay/pause on scroll
+   ========================================================================= */
+function toggleReelPlay(video) {
+  if (video.paused) video.play(); else video.pause();
+}
+
+function setupReelObserver() {
+  const container = document.getElementById("reel-container");
+  if (!container) return;
+  const videos = container.querySelectorAll("video[data-reel-video]");
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const video = entry.target;
+      if (entry.isIntersecting && entry.intersectionRatio > 0.6) {
+        videos.forEach(v => { if (v !== video) v.pause(); });
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    });
+  }, { root: container, threshold: [0, 0.6, 1] });
+
+  videos.forEach(v => observer.observe(v));
+}
+
+/* =========================================================================
+   INIT
+   ========================================================================= */
+window.addEventListener("DOMContentLoaded", () => {
+  render();
+  if (state.user && state.token) fetchPosts();
+});
+</script>
+</body>
+</html>
